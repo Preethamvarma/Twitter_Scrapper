@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Twitter Trending Topics</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f4f4f4;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+        }
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            font-size: 16px;
+            margin: 10px 0;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        ul {
+            list-style-type: disc;
+            padding-left: 20px;
+            text-align: left;
+        }
+        pre {
+            background-color: #eee;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+        #error {
+            margin-top: 10px;
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Twitter Trending Topics</h1>
+        <button onclick="runScript()">Click here to run the script</button>
+        <div id="result"></div>
+        <div id="error"></div>
+    </div>
+    <script>
+        let isRunning = false; // Flag to prevent multiple clicks
+
+        function runScript() {
+            const resultDiv = document.getElementById('result');
+            const errorDiv = document.getElementById('error');
+            const button = document.querySelector('button');
+
+            if (isRunning) return; // Prevent multiple executions
+
+            isRunning = true;
+            button.disabled = true; // Disable button during execution
+            resultDiv.innerHTML = "<p>Fetching data...</p>";
+            errorDiv.textContent = '';
+
+            fetch('/run_script')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    let formattedOutput = `<p>These are the most happening topics as on ${data.timestamp}</p>`;
+                    formattedOutput += '<ul>';
+                    data.trends.forEach(trend => {
+                        formattedOutput += `<li>${trend}</li>`;
+                    });
+                    formattedOutput += '</ul>';
+                    formattedOutput += `<p>The IP address used for this query was ${data.ip_address}.</p>`;
+                    formattedOutput += `<p>Here’s a JSON extract of this record from the MongoDB:</p>`;
+                    formattedOutput += `<pre>${JSON.stringify(data.mongo_record, null, 2)}</pre>`;
+
+                    resultDiv.innerHTML = formattedOutput;
+                    button.textContent = "Click here to run the query again";
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    errorDiv.textContent = `Error: ${error.message}`;
+                    resultDiv.innerHTML = '';
+                })
+                .finally(() => {
+                    isRunning = false;
+                    button.disabled = false;
+                });
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,231 @@
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
+from webdriver_manager.chrome import ChromeDriverManager
+from getpass import getpass
+import time
+import uuid
+import requests
+import datetime
+import os
+from pymongo import MongoClient
+import http.client
+import json
+
+# MongoDB Configuration
+MONGO_URI = "mongodb://localhost:27017/"
+DB_NAME = "twitter_scraper"
+COLLECTION_NAME = "trending_topics"
+
+# Twitter Credentials
+TWITTER_USERNAME = "PreethamVarma11"
+TWITTER_PASSWORD = "shashi@123"
+
+def get_proxy():
+    """Fetch proxy from the API."""
+    conn = http.client.HTTPSConnection("open-proxies.p.rapidapi.com")
+    headers = {
+        'x-rapidapi-key': "5aa0289720mshd1ceb11332bb0bdp1d7869jsn5b54b4632fec",
+        'x-rapidapi-host': "open-proxies.p.rapidapi.com"
+    }
+    conn.request("GET", "/proxies", headers=headers)
+    res = conn.getresponse()
+    data = res.read()
+    proxies = json.loads(data.decode("utf-8"))
+    if proxies:
+        # Return the first proxy in the list
+        return proxies[0]
+    return None
+
+def get_chromedriver_path():
+    """Tries to find chromedriver executable in common locations."""
+    locations = [
+        r"C:\Users\preet\Downloads\chromedriver-win64\chromedriver-win64\chromedriver.exe",  # Original location
+        "/usr/local/bin/chromedriver",  # Common Linux/macOS location
+        "/usr/bin/chromedriver",  # Another possible location
+        "./chromedriver",  # Current directory (less common)
+    ]
+    for location in locations:
+        if os.path.exists(location):
+            return location
+    return None  # Return None if chromedriver is not found
+
+def create_chrome_driver(proxy=None):
+    try:
+        chrome_options = Options()
+        if proxy:
+            #Correctly set the proxy
+            proxy_server = f"http://{proxy['ip']}:{proxy['port']}" # Format proxy string correctly
+            chrome_options.add_argument(f'--proxy-server={proxy_server}')
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+        print("ChromeDriver created successfully.")
+        return driver
+    except Exception as e:
+        print(f"Error creating ChromeDriver: {e}")
+        return None
+
+def send_keys_and_enter(element, text):
+    element.send_keys(text)
+    element.send_keys(Keys.RETURN)
+
+def scrape_twitter(driver):
+    wait = WebDriverWait(driver, 60)
+    try:
+        print("Navigating to X login page...")
+        driver.get("https://x.com/i/flow/login")
+        print("Navigated to login page.")
+        
+        try:
+            # --- DEBUGGING START ---
+            print("Current URL:", driver.current_url)  # Check if redirected or not
+            print("Page source length:", len(driver.page_source))
+            print("Page Source (first 500 chars):\n", driver.page_source[:500])
+          #  driver.save_screenshot(f"debug_login_page_{unique_id}.png") # Take a screenshot right after navigation
+            
+            time.sleep(10) # Add a wait for 10 seconds after get request.
+            print("Waited for 10 seconds")
+
+            print("Current URL (after wait):", driver.current_url)
+            print("Page source length (after wait):", len(driver.page_source))
+            print(driver.page_source)  # Entire source after the wait
+        #    driver.save_screenshot(f"debug_login_page_after_wait_{unique_id}.png")
+
+            # --- DEBUGGING END ---
+        except Exception as navigation_error:  # Catch navigation errors
+            print(f"Error navigating to login page: {navigation_error}")
+          #  driver.save_screenshot(f"navigation_error_{unique_id}.png") # Capture screenshot
+            print(driver.page_source) # Print the page source to see what was received.
+            return None  # Handle the navigation error appropriately
+
+        # Check page title to ensure successful load (especially important with proxies)
+        try:
+            print("Checking login page title...")
+            wait.until(EC.title_contains("Log in to X"))  # Title of the login page
+            print("X Login page loaded.")
+        except Exception as page_load_error:
+            print(f"Error loading initial X page: {page_load_error}")
+        #    driver.save_screenshot(f"initial_page_load_error_{unique_id}.png")  # More descriptive screenshot name
+            return None
+
+        # 1. Enter username and click "Next"
+        try:
+            print("Entering username...")
+            username_locator = (By.NAME, "text")  # Use name attribute, simple and robust
+            # First wait for element to be present before entering the username
+            wait.until(EC.presence_of_element_located(username_locator))
+            username_input = wait.until(EC.element_to_be_clickable(username_locator))
+            send_keys_and_enter(username_input, TWITTER_USERNAME) # Press enter instead of next
+            print("Entered username.")
+
+        except Exception as username_error:
+            print(f"Username entry error: {username_error}")
+            return None # return None if signin fails
+
+        # 2. Handle potential challenge page (phone/email verification)
+        challenge_passed = False  # Flag variable to check challenge status.
+        try:
+                challenge_locator = (By.XPATH, "//*[contains(text(),'We sent you a code')] | //*[contains(text(),'Enter your phone number or email address')] | //*[contains(text(), 'Enter your email address or username')]")
+
+                challenge_element = WebDriverWait(driver, 20).until(
+                    EC.presence_of_element_located(challenge_locator)
+                )
+                print("Challenge detected. Entering phone number...")
+
+                # Find phone/email input field within the challenge
+                phone_email_locator = (By.XPATH, "//input[@type='tel' or @type='email' or @type='text']")  # Generalized locator
+                phone_email_input = WebDriverWait(driver, 10).until(EC.element_to_be_clickable(phone_email_locator))
+            
+                phone_number = "+916304843055"  # Replace with the actual number if needed. Read from env variable if needed.
+                phone_email_input.send_keys(phone_number)
+                phone_email_input.send_keys(Keys.RETURN)  # Press Enter after number. If there is a next button for phone/email entry, click it. If there are any additional options are present like `Next` for submitting phone, use it. Don't use return key if it doesn't work.
+                print(f"Entered: {phone_number}")
+
+                # Wait for password field to appear *after* entering phone/email and any redirect has happened.
+                password_locator = (By.NAME, "password")
+                print("Waiting for password field after challenge...")
+                WebDriverWait(driver, 20).until(EC.presence_of_element_located(password_locator)) # Wait for the password field to appear
+                print("Password field is present now")
+                WebDriverWait(driver, 10).until(EC.element_to_be_clickable(password_locator))
+                print("Password field is clickable now")
+
+                challenge_passed = True
+        except Exception as challenge_error:
+                # No challenge found after timeout
+                print(f"No challenge detected after timeout: {challenge_error}")
+
+        # 3. Password input
+        if challenge_passed:
+            try:
+                # Pause execution to allow manual entry on the webpage
+                input("Please enter your password in the browser and press Enter to continue...")
+
+                # It's essential to verify the login was successful *after* manual input by checking for the presence of an element *only* visible *after* login or wait for redirect to happen after login:
+                print("Verifying login...")  # Important: Add a post-login check!
+                WebDriverWait(driver, 20).until(EC.url_to_be("https://x.com/home")) # wait for the redirect to happen after login
+
+                print("Login successful.")
+
+            except Exception as password_error:
+                print(f"Password entry error: {password_error}")
+            #    driver.save_screenshot(f"password_entry_error_{unique_id}.png")
+                return None  # Exit on error
+
+        # 3. Post-login verification and scraping
+        try:
+            print("Verifying login and waiting for home link...") # Check element that appears after log in
+            wait.until(EC.presence_of_element_located((By.XPATH, "//a[@aria-label='Home']"))) # Example check, you'll likely need to adjust this.
+
+            print("Login successful. Scraping trends...")
+            trends_section = wait.until(EC.visibility_of_all_elements_located(
+                (By.XPATH, "//section//span[contains(text(), 'Trending')]/ancestor::section//span[contains(@dir,'ltr')]")
+            ))
+            top_trends = [trend.text for trend in trends_section[:5]]  # Top 5 trends
+
+            end_time = datetime.datetime.now()
+
+            try:
+                ip_address = requests.get("http://api.ipify.org", timeout=10).text
+                print(f"Retrieved IP: {ip_address}")
+
+            except requests.exceptions.RequestException as ip_error:
+                print(f"IP retrieval error: {ip_error}")
+                ip_address = "Unknown"
+
+            # Save to MongoDB
+            client = MongoClient(MONGO_URI)
+            db = client[DB_NAME]
+            collection = db[COLLECTION_NAME]
+
+            record = {
+                "end_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "ip_address": ip_address,
+                **{f"trend{i}": trend for i, trend in enumerate(top_trends, start=1)} # Include trends directly
+            }
+
+            collection.insert_one(record)
+            print(f"Record inserted into MongoDB: {record}")
+            return record  # Return the scraped record
+
+        except Exception as scraping_error:
+            print(f"Scraping error: {scraping_error}")
+        #    driver.save_screenshot(f"scraping_error_{unique_id}.png")
+            return None
+
+    except Exception as e:
+        print(f"Overall error in scrape_twitter: {e}")
+        return None  # Always return None on error
+
+
+if __name__ == "__main__":
+    print("Starting scraper...")
+    proxy = get_proxy()  # Fetch a proxy
+    driver = create_chrome_driver(proxy)  # Pass the proxy to the driver
+    if driver:
+        result = scrape_twitter(driver)
+        if result:
+            print("Scraped data:", result)
+        driver.quit()
